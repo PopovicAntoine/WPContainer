@@ -1,0 +1,18 @@
+/*
+Theme Name: Mon thème
+Description: Thème minimal pour la démonstration du déploiement continu
+Version: 1.0
+Text Domain: montheme
+*/
+
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 48rem;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  line-height: 1.6;
+}
+
+.tagline {
+  color: #555;
+}

@@ -1,0 +1,8 @@
+.git
+.github
+.env
+.env.example
+backup.sh
+restore.sh
+docker-compose.yml
+nginx.conf

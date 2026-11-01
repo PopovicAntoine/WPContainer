@@ -1,0 +1,2 @@
+# Secrets : ne jamais versionner
+.env
