@@ -98,6 +98,18 @@ jobs:
         run: |
           install -d "$DEPLOY_DIR"
           install -m 644 docker-compose.yml nginx.conf "$DEPLOY_DIR/"
+      
+      - name: Vérification des secrets
+        env:
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+        run: |
+          for v in DB_PASSWORD DB_ROOT_PASSWORD; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Le secret $v est vide ou absent de l'environnement test"
+              exit 1
+            fi
+          done
 
       - name: Écriture du fichier .env à partir des secrets
         env:
