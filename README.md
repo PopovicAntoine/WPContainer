@@ -26,5 +26,3 @@ Dans **Settings > Secrets and variables > Actions**, ajouter les secrets suivant
 - `DEPLOY_PATH` : chemin absolu du dépôt cloné sur le VPS.
 - `SSH_PORT` : port SSH, facultatif (22 par défaut).
 
-Ne pas ajouter le fichier `.env` de production au dépôt. Le déploiement utilise celui
-qui est déjà présent sur le VPS.
