@@ -1,0 +1,16 @@
+modules:
+  # Sonde du site WordPress.
+  #
+  # On interroge /wp-login.php et on ne suit pas les redirections : une requête
+  # faite avec le nom d'hôte "proxy" serait sinon redirigée par WordPress vers
+  # son adresse publique (siteurl), inaccessible depuis ce container.
+  # Un code 200 (ou une redirection vers l'installeur) prouve que nginx,
+  # Apache/PHP et MariaDB répondent : sans base, WordPress renvoie une erreur 500.
+  http_wordpress:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      follow_redirects: false
+      valid_status_codes: [200, 301, 302]

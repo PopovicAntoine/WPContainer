@@ -6,3 +6,6 @@ backup.sh
 restore.sh
 docker-compose.yml
 nginx.conf
+monitoring
+docker-compose.monitoring.yml
+secrets

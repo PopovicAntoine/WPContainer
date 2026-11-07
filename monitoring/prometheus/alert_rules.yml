@@ -1,0 +1,134 @@
+groups:
+  # ---------------------------------------------------------------- Disponibilité
+  - name: disponibilite
+    rules:
+      - alert: WordPressDown
+        expr: probe_success{job="blackbox-wordpress"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Le site ne répond plus ({{ $labels.instance }})"
+          description: "La sonde HTTP via le proxy nginx échoue depuis plus d'une minute (nginx, WordPress ou MariaDB)."
+
+      - alert: WordPressLent
+        expr: probe_duration_seconds{job="blackbox-wordpress"} > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "WordPress répond lentement ({{ $labels.instance }})"
+          description: "Temps de réponse de {{ $value | humanizeDuration }} depuis 5 minutes (seuil : 2 s)."
+
+      # Sans effet tant que le site est servi en HTTP (aucune métrique de certificat).
+      - alert: CertificatTLSBientotExpire
+        expr: ((probe_ssl_earliest_cert_expiry{job="blackbox-wordpress"} > 0) - time()) < 15 * 86400
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Certificat TLS de {{ $labels.instance }} bientôt expiré"
+          description: "Expiration dans {{ $value | humanizeDuration }}."
+
+      - alert: MariaDBDown
+        expr: mysql_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MariaDB est injoignable"
+          description: "mysqld_exporter ne parvient plus à interroger la base depuis plus d'une minute."
+
+      - alert: CibleDePrometheusInjoignable
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cible {{ $labels.job }} injoignable ({{ $labels.instance }})"
+          description: "Prometheus n'arrive plus à collecter cette cible."
+
+  # ---------------------------------------------------------------- MariaDB
+  - name: mariadb
+    rules:
+      - alert: MariaDBConnexionsSaturees
+        expr: mysql_global_status_threads_connected / mysql_global_variables_max_connections > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MariaDB : plus de 80 % des connexions utilisées"
+          description: "Utilisation actuelle : {{ $value | humanizePercentage }}."
+
+      - alert: MariaDBRequetesLentes
+        expr: increase(mysql_global_status_slow_queries[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MariaDB : hausse des requêtes lentes"
+          description: "{{ $value | printf \"%.0f\" }} requêtes lentes sur les 5 dernières minutes."
+
+  # ---------------------------------------------------------------- Containers
+  - name: containers
+    rules:
+      - alert: ContainerMemoireElevee
+        expr: (container_memory_working_set_bytes{name!=""} / (container_spec_memory_limit_bytes{name!=""} > 0)) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} : mémoire > 85 % de sa limite"
+          description: "Utilisation : {{ $value | humanizePercentage }}."
+
+      - alert: ContainerRedemarrages
+        expr: changes(container_start_time_seconds{name!=""}[10m]) > 3
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} redémarre en boucle"
+          description: "Plus de 3 redémarrages en 10 minutes."
+
+      # Un des trois services de l'application n'a plus de container actif.
+      # On s'appuie sur le nom du service Compose (db, wordpress, proxy), qui ne
+      # dépend pas du préfixe du projet ni du numéro du container.
+      - alert: ServiceApplicatifAbsent
+        expr: |
+          count(count by (container_label_com_docker_compose_service) (
+            container_last_seen{container_label_com_docker_compose_service=~"db|wordpress|proxy"}
+          )) < 3
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Un service de l'application (db, wordpress ou proxy) n'a plus de container actif"
+          description: "Seuls {{ $value }} services sur 3 sont présents dans cAdvisor."
+
+  # ---------------------------------------------------------------- Hôte
+  - name: hote
+    rules:
+      - alert: HoteCPUEleve
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU de l'hôte supérieur à 85 %"
+          description: "Utilisation actuelle : {{ $value | printf \"%.0f\" }} %."
+
+      - alert: HoteMemoireEleve
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mémoire de l'hôte utilisée à plus de 90 %"
+
+      - alert: HoteDisqueQuasiPlein
+        expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs"}) < 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disque {{ $labels.mountpoint }} : moins de 20 % d'espace libre"
+          description: "Espace libre : {{ $value | humanizePercentage }}."

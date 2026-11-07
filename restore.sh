@@ -77,6 +77,11 @@ gzip -dc "${DB_FILE}" | docker compose exec -T db sh -c \
 log "Redémarrage de WordPress..."
 docker compose start wordpress
 
+# Remet aussi en route le reste de la stack (le proxy Nginx n'est pas lancé
+# plus haut) : utile après un "docker compose down -v".
+log "Démarrage du reste de la stack..."
+docker compose up -d
+
 log "Contrôle du nombre de tables restaurées :"
 docker compose exec -T db sh -c \
   'mariadb -u root -p"$MARIADB_ROOT_PASSWORD" -N -e \

@@ -1,0 +1,53 @@
+# Tests unitaires des règles d'alerte : promtool test rules alert_rules_test.yml
+# (exécutés par le job "lint" du workflow, avant tout déploiement).
+rule_files:
+  - alert_rules.yml
+evaluation_interval: 15s
+tests:
+  # Les 3 services présents : pas d'alerte ; "proxy" disparaît à partir de 5 min.
+  - interval: 15s
+    input_series:
+      - series: 'container_last_seen{container_label_com_docker_compose_service="db"}'
+        values: '1+0x60'
+      - series: 'container_last_seen{container_label_com_docker_compose_service="wordpress"}'
+        values: '1+0x60'
+      - series: 'container_last_seen{container_label_com_docker_compose_service="proxy"}'
+        values: '1+0x20 stale'
+      - series: 'container_last_seen{container_label_com_docker_compose_service="grafana"}'
+        values: '1+0x60'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ServiceApplicatifAbsent
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: ServiceApplicatifAbsent
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Un service de l'application (db, wordpress ou proxy) n'a plus de container actif"
+              description: "Seuls 2 services sur 3 sont présents dans cAdvisor."
+  # Sonde en échec puis MariaDB injoignable
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{job="blackbox-wordpress", instance="http://proxy/wp-login.php"}'
+        values: '1x10 0x20'
+      - series: 'mysql_up'
+        values: '1x10 0x20'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: WordPressDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: WordPressDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: blackbox-wordpress, instance: "http://proxy/wp-login.php"}
+            exp_annotations:
+              summary: "Le site ne répond plus (http://proxy/wp-login.php)"
+              description: "La sonde HTTP via le proxy nginx échoue depuis plus d'une minute (nginx, WordPress ou MariaDB)."
+      - eval_time: 5m
+        alertname: MariaDBDown
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "MariaDB est injoignable"
+              description: "mysqld_exporter ne parvient plus à interroger la base depuis plus d'une minute."

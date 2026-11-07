@@ -13,6 +13,9 @@ concurrency:
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/wordpress-custom
   DEPLOY_DIR: /opt/wordpress
+  # Application + supervision : toutes les commandes "docker compose" du
+  # workflow portent sur la stack complète.
+  COMPOSE_FILE: docker-compose.yml:docker-compose.monitoring.yml
 
 jobs:
   # ---------------------------------------------------------------
@@ -30,6 +33,23 @@ jobs:
 
       - name: Validation du fichier Compose
         run: docker compose --env-file .env.example config --quiet
+
+      # promtool / amtool contrôlent la syntaxe des configurations et des
+      # règles d'alerte avant tout déploiement.
+      - name: Validation de la supervision (Prometheus, Alertmanager, Grafana)
+        run: |
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool prom/prometheus:v2.53.0 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool prom/prometheus:v2.53.0 \
+            test rules /etc/prometheus/alert_rules_test.yml
+          docker run --rm -v "$PWD/monitoring/alertmanager:/etc/alertmanager:ro" \
+            --entrypoint amtool prom/alertmanager:v0.28.1 \
+            check-config /etc/alertmanager/alertmanager.yml
+          for f in monitoring/grafana/dashboards/*.json; do
+            python3 -m json.tool "$f" > /dev/null
+          done
 
   # ---------------------------------------------------------------
   # 2. Construction de l'image et envoi vers GHCR
@@ -97,37 +117,81 @@ jobs:
       - name: Copie des fichiers de déploiement
         run: |
           install -d "$DEPLOY_DIR"
-          install -m 644 docker-compose.yml nginx.conf "$DEPLOY_DIR/"
-      
+          install -m 644 docker-compose.yml docker-compose.monitoring.yml nginx.conf "$DEPLOY_DIR/"
+          install -m 755 backup.sh restore.sh "$DEPLOY_DIR/"
+          # Configuration de supervision : copie "en place" (cp écrase les
+          # fichiers existants sans changer leur inode).
+          install -d "$DEPLOY_DIR/monitoring"
+          cp -a monitoring/. "$DEPLOY_DIR/monitoring/"
+
       - name: Vérification des secrets
         env:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          MYSQL_EXPORTER_PASSWORD: ${{ secrets.MYSQL_EXPORTER_PASSWORD }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
-          for v in DB_PASSWORD DB_ROOT_PASSWORD; do
+          for v in DB_PASSWORD DB_ROOT_PASSWORD GRAFANA_ADMIN_PASSWORD MYSQL_EXPORTER_PASSWORD; do
             if [ -z "${!v}" ]; then
               echo "::error::Le secret $v est vide ou absent de l'environnement test"
               exit 1
             fi
           done
+          # Ces mots de passe sont insérés dans du SQL et dans des fichiers de
+          # configuration : on refuse les caractères qui les casseraient.
+          for v in GRAFANA_ADMIN_PASSWORD MYSQL_EXPORTER_PASSWORD; do
+            if [[ "${!v}" =~ [\'\"\\\$\`[:space:]] ]]; then
+              echo "::error::Le secret $v contient un caractère interdit (' \" \\ \$ \` ou espace)"
+              exit 1
+            fi
+          done
+          if [ -z "$SMTP_PASSWORD" ]; then
+            echo "::warning::Secret SMTP_PASSWORD absent : Alertmanager ne pourra pas envoyer de mails."
+          fi
 
-      - name: Écriture du fichier .env à partir des secrets
+      - name: Écriture du fichier .env et des secrets de supervision
         env:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          MYSQL_EXPORTER_PASSWORD: ${{ secrets.MYSQL_EXPORTER_PASSWORD }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          # Variable GitHub facultative (Settings > Environments > test > Variables) :
+          # adresse de la VM sur le réseau WireGuard pour joindre Grafana à distance.
+          GRAFANA_BIND: ${{ vars.GRAFANA_BIND }}
         run: |
           umask 077
           {
             echo "DB_PASSWORD=${DB_PASSWORD}"
             echo "DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}"
             echo "WP_IMAGE=${IMAGE_NAME,,}:latest"
+            echo "COMPOSE_FILE=${COMPOSE_FILE}"
+            echo "GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}"
+            echo "MYSQL_EXPORTER_PASSWORD=${MYSQL_EXPORTER_PASSWORD}"
+            if [ -n "$GRAFANA_BIND" ]; then
+              echo "GRAFANA_BIND=${GRAFANA_BIND}"
+            fi
           } > "$DEPLOY_DIR/.env"
+
+          # Fichiers lus par les containers (Docker secrets). Les fichiers sont
+          # lisibles (644) mais le dossier est en 700 : seul l'utilisateur du
+          # runner (et Docker) peut y accéder.
+          install -d -m 700 "$DEPLOY_DIR/secrets"
+          printf '[client]\nuser=exporter\npassword="%s"\n' "$MYSQL_EXPORTER_PASSWORD" \
+            > "$DEPLOY_DIR/secrets/mysqld_exporter.cnf"
+          printf '%s' "$SMTP_PASSWORD" > "$DEPLOY_DIR/secrets/smtp_password"
+          chmod 644 "$DEPLOY_DIR/secrets/mysqld_exporter.cnf" "$DEPLOY_DIR/secrets/smtp_password"
 
       - name: Mise à jour de la stack
         working-directory: ${{ env.DEPLOY_DIR }}
         run: |
           docker compose pull
           docker compose up -d --remove-orphans
+          # Les fichiers de configuration sont montés en lecture seule : un
+          # changement de leur contenu ne recrée pas les containers, on les
+          # redémarre pour qu'ils relisent leur configuration.
+          docker compose restart prometheus alertmanager blackbox-exporter grafana
 
       - name: smoke test
         working-directory: ${{ env.DEPLOY_DIR }}
@@ -143,6 +207,27 @@ jobs:
           echo "Le site ne répond pas après 60 s." >&2
           docker compose ps
           docker compose logs --tail=50
+          exit 1
+
+      # La supervision contrôle le déploiement : toutes les cibles Prometheus
+      # (Prometheus, hôte, containers, MariaDB, sonde HTTP) doivent être "up".
+      - name: Contrôle de la supervision
+        working-directory: ${{ env.DEPLOY_DIR }}
+        run: |
+          for i in $(seq 1 18); do
+            T="$(curl -fsS http://127.0.0.1:9090/api/v1/targets 2>/dev/null || true)"
+            UP="$(grep -o '"health":"up"' <<<"$T" | wc -l)"
+            NOT_UP="$(grep -oE '"health":"(down|unknown)"' <<<"$T" | wc -l)"
+            if [ "$UP" -ge 5 ] && [ "$NOT_UP" -eq 0 ]; then
+              echo "Supervision opérationnelle : $UP cibles Prometheus en ligne."
+              exit 0
+            fi
+            echo "Tentative $i/18 : $UP cibles up, $NOT_UP down/inconnues..."
+            sleep 5
+          done
+          echo "Des cibles Prometheus ne répondent pas après 90 s." >&2
+          docker compose ps
+          docker compose logs --tail=30 prometheus mysqld-exporter db-exporter-init
           exit 1
 
       - name: Nettoyage des anciennes images

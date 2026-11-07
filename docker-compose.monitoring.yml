@@ -1,0 +1,155 @@
+# Supervision : Prometheus + Grafana + Alertmanager + exporters.
+#
+# Fichier complémentaire de docker-compose.yml (mêmes réseaux frontend/backend,
+# même projet Compose). Il est activé par la variable COMPOSE_FILE, écrite dans
+# .env par le pipeline (voir .env.example) :
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.monitoring.yml
+# Toutes les commandes "docker compose" lancées dans /opt/wordpress (pipeline,
+# backup.sh, restore.sh) voient alors la même stack complète.
+
+services:
+  # Tâche ponctuelle : crée (ou met à jour) l'utilisateur MariaDB en lecture
+  # seule utilisé par mysqld-exporter. Idempotente : elle est relancée à chaque
+  # "up" et se termine aussitôt.
+  db-exporter-init:
+    image: mariadb:11
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MYSQL_PWD: ${DB_ROOT_PASSWORD}
+      MYSQL_EXPORTER_PASSWORD: ${MYSQL_EXPORTER_PASSWORD:?Définir MYSQL_EXPORTER_PASSWORD dans .env}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mariadb -h db -u root -e "
+          CREATE USER IF NOT EXISTS 'exporter'@'%' IDENTIFIED BY '$${MYSQL_EXPORTER_PASSWORD}' WITH MAX_USER_CONNECTIONS 3;
+          ALTER USER 'exporter'@'%' IDENTIFIED BY '$${MYSQL_EXPORTER_PASSWORD}' WITH MAX_USER_CONNECTIONS 3;
+          GRANT PROCESS, REPLICATION CLIENT, SELECT ON *.* TO 'exporter'@'%';"
+    networks:
+      - backend
+
+  mysqld-exporter:
+    image: prom/mysqld-exporter:v0.15.1
+    restart: unless-stopped
+    command:
+      - --config.my-cnf=/run/secrets/mysqld_exporter_cnf
+      - --mysqld.address=db:3306
+    secrets:
+      - mysqld_exporter_cnf
+    depends_on:
+      db-exporter-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring
+      - backend
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - monitoring
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - monitoring
+
+  # Sonde HTTP : interroge le proxy nginx (donc toute la chaîne
+  # nginx -> WordPress -> MariaDB), comme le ferait un visiteur.
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+    volumes:
+      - ./monitoring/blackbox:/etc/blackbox:ro
+    networks:
+      - monitoring
+      - frontend
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    secrets:
+      - smtp_password
+    volumes:
+      - ./monitoring/alertmanager:/etc/alertmanager:ro
+      - alertmanager_data:/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    networks:
+      - monitoring
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROM_RETENTION:-15d}
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - alertmanager
+    networks:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Définir GRAFANA_ADMIN_PASSWORD dans .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    # Par défaut Grafana n'est joignable que depuis la VM. Pour l'ouvrir au
+    # réseau WireGuard, mettre dans .env GRAFANA_BIND=<adresse IP de la VM sur le VPN>.
+    ports:
+      - "${GRAFANA_BIND:-127.0.0.1}:3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring
+
+# Fichiers écrits par le pipeline dans /opt/wordpress/secrets (dossier en 700) :
+# les mots de passe ne figurent ni dans Git ni dans les fichiers de configuration.
+secrets:
+  mysqld_exporter_cnf:
+    file: ./secrets/mysqld_exporter.cnf
+  smtp_password:
+    file: ./secrets/smtp_password
+
+networks:
+  # frontend et backend sont déclarés dans docker-compose.yml
+  monitoring:
+
+volumes:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:
