@@ -19,9 +19,7 @@ services:
       - backend
 
   wordpress:
-    # WP_IMAGE est défini dans .env (écrit par le pipeline) ; la valeur par
-    # défaut sert aux essais manuels : remplace "votre-compte" par le tien.
-    image: ${WP_IMAGE:-ghcr.io/votre-compte/wordpress-custom:latest}
+    image: ${WP_IMAGE:-ghcr.io/PopovicAntoine/wordpress-custom:latest}
     restart: unless-stopped
     depends_on:
       db:
@@ -56,5 +54,4 @@ volumes:
 networks:
   frontend:
   backend:
-    # Réseau interne : la base n'est joignable que par WordPress
     internal: true

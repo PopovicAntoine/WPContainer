@@ -26,7 +26,7 @@ ou manuellement (`workflow_dispatch`). Un seul déploiement s'exécute à la foi
 2. **build** : construction de l'image (buildx, cache GitHub Actions) et envoi vers GHCR avec les tags `latest` et `sha-<commit>`.
 3. **deploy-test** : exécuté sur le runner auto-hébergé de la VM, environnement GitHub `test` :
    copie des fichiers dans `/opt/wordpress`, écriture du `.env`, `docker compose pull` puis `up -d --remove-orphans`,
-   test de fumée du site, contrôle de la supervision, nettoyage des anciennes images.
+   smokescreen test du site, contrôle de la supervision, nettoyage des anciennes images.
 
 ### Préparer la VM
 
@@ -93,19 +93,7 @@ réseau interne) et `frontend` (sonde sur le proxy). Seul le port 80 du proxy
 reste publié sur toutes les interfaces ; Prometheus, Alertmanager et Grafana
 n'écoutent que sur `127.0.0.1` par défaut.
 
-### Secrets et variables de la supervision
 
-Dans l'environnement `test` (**Settings > Environments > test**) :
-
-- Secrets `GRAFANA_ADMIN_PASSWORD` et `MYSQL_EXPORTER_PASSWORD` : obligatoires.
-  Éviter les caractères `'` `"` `\` `$` et les espaces (le pipeline les refuse).
-- Secret `SMTP_PASSWORD` : mot de passe du compte qui envoie les mails d'alerte (facultatif ;
-  sans lui, les alertes restent visibles dans Prometheus et Alertmanager mais aucun mail ne part).
-- Variable `GRAFANA_BIND` (facultatif) : adresse de la VM sur le réseau WireGuard,
-  pour ouvrir Grafana à distance. Sans elle, Grafana n'écoute que sur `127.0.0.1`.
-
-Avant le premier déploiement, adapter dans `monitoring/alertmanager/alertmanager.yml`
-l'hôte SMTP et les adresses d'expédition et de réception.
 
 ### Ce que fait le pipeline
 
@@ -123,8 +111,7 @@ l'hôte SMTP et les adresses d'expédition et de réception.
 | Prometheus | http://127.0.0.1:9090 (onglets Targets et Alerts) |
 | Alertmanager | http://127.0.0.1:9093 |
 
-Depuis un autre poste : via WireGuard avec `GRAFANA_BIND`, ou par tunnel SSH
-(`ssh -L 3000:127.0.0.1:3000 utilisateur@vm`).
+Depuis un autre poste : par tunnel SSH (`ssh -L 3000:127.0.0.1:3000 utilisateur@vm`).
 
 ### Indicateurs et seuils d'alerte
 

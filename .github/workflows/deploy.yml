@@ -5,7 +5,7 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Un seul déploiement à la fois ; un nouveau push attend la fin du précédent.
+# Un seul déploiement à la fois.
 concurrency:
   group: deploy-test
   cancel-in-progress: false
@@ -13,8 +13,6 @@ concurrency:
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/wordpress-custom
   DEPLOY_DIR: /opt/wordpress
-  # Application + supervision : toutes les commandes "docker compose" du
-  # workflow portent sur la stack complète.
   COMPOSE_FILE: docker-compose.yml:docker-compose.monitoring.yml
 
 jobs:
@@ -71,8 +69,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Génère les tags (latest + SHA du commit) et met le nom en minuscules,
-      # ce que GHCR exige.
+      # Génère les tags (latest + SHA du commit) et met le nom en minuscules, pour etre accepté par GHCR :
       - id: meta
         uses: docker/metadata-action@v5
         with:
@@ -110,10 +107,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Les fichiers de déploiement vivent dans /opt/wordpress, le même
-      # dossier que celui utilisé par backup.sh et restore.sh : le nom de
-      # projet Compose (donc des volumes) reste identique d'un déploiement
-      # à l'autre. L'utilisateur du runner doit avoir les droits d'écriture.
       - name: Copie des fichiers de déploiement
         run: |
           install -d "$DEPLOY_DIR"
