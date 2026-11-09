@@ -4,7 +4,7 @@ global:
   smtp_from: "popovic.antoine@gmail.com"
   smtp_auth_username: "popovic.antoine@gmail.com"
   smtp_auth_password_file: /run/secrets/smtp_password
-  smtp_require_tls: false
+  
 
 route:
   receiver: admin
