@@ -1,16 +1,13 @@
 global:
   resolve_timeout: 5m
-  # --- Paramètres SMTP : adapter l'hôte et les adresses ---
-  # Le mot de passe n'est pas dans ce fichier : il est lu dans /run/secrets/smtp_password,
-  # écrit par le pipeline à partir du secret GitHub SMTP_PASSWORD.
-  smtp_smarthost: "smtp.exemple.fr:587"
-  smtp_from: "supervision@exemple.fr"
-  smtp_auth_username: "supervision@exemple.fr"
+  smtp_smarthost: "smtp.gmail.com:587"
+  smtp_from: "popovic.antoine@gmail.com"
+  smtp_auth_username: "popovic.antoine@gmail.com"
   smtp_auth_password_file: /run/secrets/smtp_password
-  smtp_require_tls: true
+  smtp_require_tls: false
 
 route:
-  receiver: equipe-exploitation
+  receiver: admin
   group_by: [alertname, job]
   group_wait: 30s
   group_interval: 5m
@@ -19,13 +16,13 @@ route:
     # Les alertes critiques sont répétées plus souvent
     - matchers:
         - severity="critical"
-      receiver: equipe-exploitation
+      receiver: admin
       repeat_interval: 1h
 
 receivers:
-  - name: equipe-exploitation
+  - name: admin
     email_configs:
-      - to: "admin@exemple.fr"
+      - to: "popovic.antoine@gmail.com"
         send_resolved: true
 
 # Une alerte critique masque l'alerte "warning" de même nom sur la même cible
