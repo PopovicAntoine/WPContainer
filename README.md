@@ -1,4 +1,4 @@
-# boosterMTG
+# WPContainer
 
 Application WordPress + MariaDB conteneurisée (Docker Compose), construite et
 déployée automatiquement par GitHub Actions sur une VM de test, avec supervision
