@@ -128,10 +128,8 @@ services:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    # Par défaut Grafana n'est joignable que depuis la VM. Pour l'ouvrir au
-    # réseau WireGuard, mettre dans .env GRAFANA_BIND=<adresse IP de la VM sur le VPN>.
     ports:
-      - "${GRAFANA_BIND:-127.0.0.1}:3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
     networks:
